@@ -1,17 +1,13 @@
 """
-Analytics engine.
+Analytics engine — COT positioning metrics.
 
-Mandate resolutions:
-  #4  Rollover Noise   – net_pct_oi is Winsorized at the 1st/99th percentile
-                          before z-score computation. Percentile ranks are the
-                          PRIMARY display signal and are inherently rollover-safe
-                          because extreme OI drops shift ALL values in that window
-                          proportionally, preserving relative rank.
-  #5  LLM Optimization – filter_extremes() returns only markets where ANY
-                          lookback window is at or beyond the 10th/90th pct
-                          threshold. Only those go to the Insight Engine.
-  #6  Specialist Board  – PRIMARY_CATEGORY and SPECIALIST_MAP encode which
-                          metric maps to which committee role.
+Signals computed per market:
+  - Percentile ranks (1Y/3Y/5Y) and Winsorized z-scores  [primary display]
+  - COT Index (0-100 range-normalized, per industry standard)
+  - Positioning state (NEUTRAL / MODERATE LONG|SHORT / EXTREME LONG|SHORT)
+  - Commercial divergence (informed money vs speculators on opposite sides)
+  - Position signal (UNWIND | SQUEEZE when extreme + weekly reversal)
+  - TFF alignment score (lev_money + asset_mgr consensus)
 """
 
 import logging
@@ -28,8 +24,19 @@ from data_pipeline import TRACKED_MARKETS
 
 log = logging.getLogger("cot.analytics")
 
-# Which category is the main "speculator" view per report type
 PRIMARY_CATEGORY = {
+    "disagg": "managed_money",
+    "tff":    "lev_money",
+}
+
+# Per professional framework: for disagg markets, producers have fundamental edge.
+# For TFF, dealers vs lev money (less reliable for equities, valid for FX/rates).
+COMMERCIAL_CATEGORY = {
+    "disagg": "prod_merc",
+    "tff":    "dealer",
+}
+
+SPECULATOR_CATEGORY = {
     "disagg": "managed_money",
     "tff":    "lev_money",
 }
@@ -49,14 +56,16 @@ class CategoryMetrics:
     net_contracts: int
     open_interest: int
     net_pct_oi: float
-    wow_change: int       # week-over-week Δnet
-    pct_1y: float         # 0-100 percentile rank vs 52 weeks
+    wow_change: int
+    pct_1y: float
     pct_3y: float
     pct_5y: float
-    z_1y: float           # Winsorized z-score vs 52 weeks
+    z_1y: float
     z_3y: float
     z_5y: float
-    sparkline: str        # 20-char Unicode block art
+    sparkline: str
+    cot_index_1y: float = 50.0   # 0-100 range-normalized (industry standard)
+    cot_index_3y: float = 50.0
 
 
 @dataclass
@@ -67,20 +76,18 @@ class MarketMetrics:
     report_type: str
     latest_date: Optional[date]
     categories: dict[str, CategoryMetrics] = field(default_factory=dict)
-    alignment_score: Optional[float] = None   # TFF only: -1.0 to +1.0
-    alignment_label: Optional[str]  = None    # "ALIGNED LONG" | "ALIGNED SHORT" | "DIVERGING"
+    alignment_score: Optional[float] = None
+    alignment_label: Optional[str]  = None
+    positioning_state: str = "NEUTRAL"       # NEUTRAL / MODERATE LONG|SHORT / EXTREME LONG|SHORT
+    divergence_signal: Optional[str] = None  # e.g. "PROD SHORT / MM LONG"
+    position_signal: Optional[str] = None    # "UNWIND" | "SQUEEZE" | None
 
 
 # ---------------------------------------------------------------------------
-# Core computation
+# Core computation helpers
 # ---------------------------------------------------------------------------
 
 def _winsorized_zscore(series: pd.Series, current: float) -> float:
-    """
-    Mandate #4: Winsorize the lookback window at the 1st/99th percentile
-    before computing mean/std. This prevents single rollover week outliers
-    from inflating the denominator and generating fake extreme z-scores.
-    """
     if len(series) < 4:
         return float("nan")
     w = mstats.winsorize(series.values.astype(float), limits=(0.01, 0.01))
@@ -97,12 +104,26 @@ def _percentile_rank(series: pd.Series, current: float) -> float:
     return round(float((series <= current).mean() * 100), 1)
 
 
+def _cot_index(series: pd.Series, current: float, lookback: int) -> float:
+    """
+    Industry-standard COT Index: 0 = period low, 100 = period high.
+    Formula: (current - period_min) / (period_max - period_min) * 100
+    """
+    seg = series.iloc[:lookback].dropna() if len(series) >= lookback else series.dropna()
+    if len(seg) < 2:
+        return 50.0
+    mn, mx = float(seg.min()), float(seg.max())
+    if mx == mn:
+        return 50.0
+    return round(max(0.0, min(100.0, (current - mn) / (mx - mn) * 100)), 1)
+
+
 def _compute_stats(
     history: pd.DataFrame,
     current_net_pct: float,
-) -> tuple[float, float, float, float, float, float]:
+) -> tuple[float, float, float, float, float, float, float, float]:
     """
-    Return (pct_1y, pct_3y, pct_5y, z_1y, z_3y, z_5y).
+    Returns (pct_1y, pct_3y, pct_5y, z_1y, z_3y, z_5y, cot_idx_1y, cot_idx_3y).
     history is sorted DESC (newest first), column net_pct_oi.
     """
     s = history["net_pct_oi"].dropna().reset_index(drop=True)
@@ -118,41 +139,97 @@ def _compute_stats(
     p1, z1 = _window(52)
     p3, z3 = _window(156)
     p5, z5 = _window(260)
-    return p1, p3, p5, z1, z3, z5
+    ci1 = _cot_index(s, current_net_pct, 52)
+    ci3 = _cot_index(s, current_net_pct, 156)
+    return p1, p3, p5, z1, z3, z5, ci1, ci3
 
 
 def _make_sparkline(series: pd.Series, width: int = 20) -> str:
-    """
-    ASCII sparkline using Unicode block elements ▁–█ (U+2581–U+2588).
-    series: net_contracts, newest-first. We reverse to chronological order.
-    """
     blocks = " ▁▂▃▄▅▆▇█"
     vals = series.dropna().iloc[::-1].values[-width:]
     if len(vals) == 0:
         return "─" * width
     mn, mx = vals.min(), vals.max()
-    rng = mx - mn
-    if rng == 0:
+    if mx - mn == 0:
         return "▄" * len(vals)
-    normalised = ((vals - mn) / rng * (len(blocks) - 1)).round().astype(int)
+    normalised = ((vals - mn) / (mx - mn) * (len(blocks) - 1)).round().astype(int)
     return "".join(blocks[i] for i in normalised)
 
 
-def _alignment_score(
-    lev_net: int,
-    am_net: int,
-    oi: int,
-) -> tuple[float, str]:
+def _alignment_score(lev_net: int, am_net: int, oi: int) -> tuple[float, str]:
     if oi == 0:
         return 0.0, "N/A"
     score = round((lev_net + am_net) / (2 * oi), 4)
     if score > 0.05:
-        label = "ALIGNED LONG ↑"
+        label = "ALIGNED LONG"
     elif score < -0.05:
-        label = "ALIGNED SHORT ↓"
+        label = "ALIGNED SHORT"
     else:
-        label = "DIVERGING  ↔"
+        label = "DIVERGING"
     return score, label
+
+
+# ---------------------------------------------------------------------------
+# New signal helpers
+# ---------------------------------------------------------------------------
+
+def _positioning_state(pct_1y: float) -> str:
+    """
+    Maps 1Y percentile rank to the professional positioning state framework.
+    Drives position sizing guidance in AI insights.
+    """
+    if pct_1y != pct_1y:   # NaN
+        return "NEUTRAL"
+    if pct_1y >= 90: return "EXTREME LONG"
+    if pct_1y >= 80: return "MODERATE LONG"
+    if pct_1y <= 10: return "EXTREME SHORT"
+    if pct_1y <= 20: return "MODERATE SHORT"
+    return "NEUTRAL"
+
+
+def _commercial_divergence(cat_metrics: dict, report_type: str) -> Optional[str]:
+    """
+    Detects when informed money (commercials/dealers) and speculators
+    are positioned in opposite directions — a classic COT divergence setup.
+
+    Disagg: producers (fundamental knowledge) vs managed money.
+    TFF: dealers vs leveraged funds.
+    Note: Per professional framework, this signal is less reliable for equity
+    index futures where dealers are market-makers, not fundamentalists.
+    """
+    comm_key = COMMERCIAL_CATEGORY.get(report_type)
+    spec_key = SPECULATOR_CATEGORY.get(report_type)
+    if not comm_key or not spec_key:
+        return None
+    comm = cat_metrics.get(comm_key)
+    spec = cat_metrics.get(spec_key)
+    if not comm or not spec:
+        return None
+    comm_long = comm.net_contracts > 0
+    spec_long = spec.net_contracts > 0
+    if comm_long == spec_long:
+        return None   # Same direction — no divergence
+    cs = "LONG" if comm_long else "SHORT"
+    ss = "LONG" if spec_long else "SHORT"
+    label = "PROD" if report_type == "disagg" else "DEAL"
+    slabel = "MM" if report_type == "disagg" else "LEV"
+    return f"{label} {cs} / {slabel} {ss}"
+
+
+def _position_signal(cat: CategoryMetrics) -> Optional[str]:
+    """
+    Detects early unwind or short-squeeze:
+    UNWIND  — position at extreme long (85th+) but specs reduced ≥0.8% OI this week
+    SQUEEZE — position at extreme short (15th-) but specs added ≥0.8% OI this week
+    """
+    if cat.open_interest == 0:
+        return None
+    wow_pct = abs(cat.wow_change) / cat.open_interest * 100
+    if cat.pct_1y >= 85 and cat.wow_change < 0 and wow_pct >= 0.8:
+        return "UNWIND"
+    if cat.pct_1y <= 15 and cat.wow_change > 0 and wow_pct >= 0.8:
+        return "SQUEEZE"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -165,7 +242,6 @@ def compute_market_metrics(
     meta: dict,
 ) -> Optional[MarketMetrics]:
     report_type = meta["report_type"]
-    categories_needed: list[str]
     if report_type == "disagg":
         categories_needed = ["prod_merc", "managed_money", "swap", "other_rept", "nonrept"]
     else:
@@ -188,20 +264,20 @@ def compute_market_metrics(
             except Exception:
                 latest_date = None
 
-        lng  = int(row0["long_contracts"])
-        sht  = int(row0["short_contracts"])
-        net  = int(row0["net_contracts"])
-        oi   = int(row0["open_interest"])
-        pct  = float(row0["net_pct_oi"]) if row0["net_pct_oi"] is not None else (net / oi * 100 if oi else 0.0)
+        lng = int(row0["long_contracts"])
+        sht = int(row0["short_contracts"])
+        net = int(row0["net_contracts"])
+        oi  = int(row0["open_interest"])
+        pct = float(row0["net_pct_oi"]) if row0["net_pct_oi"] is not None else (net / oi * 100 if oi else 0.0)
 
         wow = 0
         if len(hist) >= 2:
             wow = net - int(hist.iloc[1]["net_contracts"])
 
-        p1, p3, p5, z1, z3, z5 = _compute_stats(hist, pct)
+        p1, p3, p5, z1, z3, z5, ci1, ci3 = _compute_stats(hist, pct)
         spark = _make_sparkline(hist["net_contracts"])
 
-        cat_metrics[cat] = CategoryMetrics(
+        cm = CategoryMetrics(
             category=cat,
             long_contracts=lng,
             short_contracts=sht,
@@ -212,10 +288,21 @@ def compute_market_metrics(
             pct_1y=p1, pct_3y=p3, pct_5y=p5,
             z_1y=z1, z_3y=z3, z_5y=z5,
             sparkline=spark,
+            cot_index_1y=ci1,
+            cot_index_3y=ci3,
         )
+        cat_metrics[cat] = cm
 
     if not cat_metrics:
         return None
+
+    # Determine primary category signals
+    primary_key = PRIMARY_CATEGORY.get(report_type, "managed_money")
+    primary     = cat_metrics.get(primary_key)
+
+    pos_state  = _positioning_state(primary.pct_1y if primary else float("nan"))
+    divergence = _commercial_divergence(cat_metrics, report_type)
+    pos_signal = _position_signal(primary) if primary else None
 
     m = MarketMetrics(
         market_code=market_code,
@@ -224,6 +311,9 @@ def compute_market_metrics(
         report_type=report_type,
         latest_date=latest_date,
         categories=cat_metrics,
+        positioning_state=pos_state,
+        divergence_signal=divergence,
+        position_signal=pos_signal,
     )
 
     # TFF alignment score
@@ -240,7 +330,6 @@ def compute_market_metrics(
 
 
 def compute_all_metrics(db_path) -> dict[str, MarketMetrics]:
-    """Compute MarketMetrics for every tracked market. Run in thread worker."""
     result = {}
     for code, meta in TRACKED_MARKETS.items():
         try:
@@ -253,18 +342,13 @@ def compute_all_metrics(db_path) -> dict[str, MarketMetrics]:
 
 
 # ---------------------------------------------------------------------------
-# LLM context filter  (Mandate #5)
+# LLM context filter
 # ---------------------------------------------------------------------------
 
 def filter_extremes(
     all_metrics: dict[str, MarketMetrics],
     threshold: float = 10.0,
 ) -> dict[str, MarketMetrics]:
-    """
-    Return only markets where the primary speculator category has ANY lookback
-    at or beyond the threshold percentile (default 10th / 90th).
-    Prevents narrative dilution by feeding Claude only the actionable signals.
-    """
     hi = 100.0 - threshold
     out = {}
     for code, m in all_metrics.items():
@@ -272,30 +356,28 @@ def filter_extremes(
         cat = m.categories.get(primary_cat or "")
         if cat is None:
             continue
-        pcts = [p for p in (cat.pct_1y, cat.pct_3y, cat.pct_5y) if not (p != p)]  # NaN-safe
+        pcts = [p for p in (cat.pct_1y, cat.pct_3y, cat.pct_5y) if p == p]
         if any(p <= threshold or p >= hi for p in pcts):
             out[code] = m
     return out
 
 
 # ---------------------------------------------------------------------------
-# Formatting helpers for UI
+# Formatting helpers
 # ---------------------------------------------------------------------------
 
 def zscore_to_style(z: float) -> str:
-    if z != z:  # NaN
-        return "dim"
-    if z > 2.0:   return "bright_red"
-    if z > 1.0:   return "red"
-    if z > 0.5:   return "yellow"
-    if z > -0.5:  return "white"
-    if z > -1.0:  return "cyan"
-    if z > -2.0:  return "green"
+    if z != z: return "dim"
+    if z > 2.0:  return "bright_red"
+    if z > 1.0:  return "red"
+    if z > 0.5:  return "yellow"
+    if z > -0.5: return "white"
+    if z > -1.0: return "cyan"
+    if z > -2.0: return "green"
     return "bright_green"
 
 
 def pct_bar(pct: float, width: int = 10) -> str:
-    """Render a text bar: [████░░░░░░] 82%"""
     if pct != pct:
         return "─" * width
     filled = round(pct / 100 * width)

@@ -54,6 +54,8 @@ def _serialize_cat(cat) -> dict:
         "z_1y":           cat.z_1y,
         "z_3y":           cat.z_3y,
         "z_5y":           cat.z_5y,
+        "cot_index_1y":   cat.cot_index_1y,
+        "cot_index_3y":   cat.cot_index_3y,
     }
 
 
@@ -69,9 +71,12 @@ def _serialize_metrics(all_metrics: dict) -> list:
             "report_type":     m.report_type,
             "latest_date":     str(m.latest_date) if m.latest_date else None,
             "primary_cat":     pcat,
-            "alignment_score": m.alignment_score,
-            "alignment_label": m.alignment_label,
-            "categories":      {k: _serialize_cat(v) for k, v in m.categories.items()},
+            "alignment_score":   m.alignment_score,
+            "alignment_label":   m.alignment_label,
+            "positioning_state": m.positioning_state,
+            "divergence_signal": m.divergence_signal,
+            "position_signal":   m.position_signal,
+            "categories":        {k: _serialize_cat(v) for k, v in m.categories.items()},
         }
         if cat:
             row.update({

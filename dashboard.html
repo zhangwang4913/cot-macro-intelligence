@@ -111,12 +111,25 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); font
 .z-cell { font-weight: bold; }
 .wow-pos { color: var(--green); }
 .wow-neg { color: var(--red); }
-.col-name { width: 120px; }
-.col-class { width: 80px; }
-.col-pct  { width: 70px; }
-.col-z    { width: 60px; }
-.col-wow  { width: 80px; }
-.col-oipct{ width: 70px; }
+.col-name  { width: 110px; }
+.col-class { width: 70px; }
+.col-state { width: 100px; }
+.col-pct   { width: 62px; }
+.col-z     { width: 54px; }
+.col-ci    { width: 54px; }
+.col-wow   { width: 72px; }
+.col-oipct { width: 64px; }
+.col-sig   { width: 72px; }
+.state-pill { font-size: 10px; font-weight: bold; padding: 2px 5px; border-radius: 3px; white-space: nowrap; }
+.state-extreme-long  { background: rgba(248,81,73,0.2);  color: #f85149; }
+.state-moderate-long { background: rgba(240,136,62,0.15); color: #f0883e; }
+.state-extreme-short { background: rgba(63,185,80,0.2);  color: #3fb950; }
+.state-moderate-short{ background: rgba(88,166,255,0.15);color: #58a6ff; }
+.state-neutral       { background: rgba(139,148,158,0.1); color: #8b949e; }
+.sig-pill { font-size: 9px; font-weight: bold; padding: 2px 5px; border-radius: 3px; white-space: nowrap; }
+.sig-unwind { background: rgba(248,81,73,0.2);  color: #f85149; }
+.sig-squeeze{ background: rgba(63,185,80,0.2);  color: #3fb950; }
+.sig-divg   { background: rgba(210,153,34,0.15);color: #d29922; }
 
 /* ── Detail tab ─────────────────────────────────────────────── */
 #detail-pane { padding: 16px 20px; overflow-y: auto; gap: 14px; }
@@ -232,15 +245,16 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); font
           <table id="heatmap-table">
             <thead>
               <tr>
-                <th class="col-name" onclick="sortBy('display')">Market</th>
+                <th class="col-name"  onclick="sortBy('display')">Market</th>
                 <th class="col-class" onclick="sortBy('asset_class')">Class</th>
-                <th class="col-pct" onclick="sortBy('pct_1y')">1Y %ile</th>
-                <th class="col-pct" onclick="sortBy('pct_3y')">3Y %ile</th>
-                <th class="col-pct" onclick="sortBy('pct_5y')">5Y %ile</th>
-                <th class="col-z" onclick="sortBy('z_1y')">1Y Z</th>
-                <th class="col-z" onclick="sortBy('z_3y')">3Y Z</th>
-                <th class="col-wow" onclick="sortBy('wow')">WoW Δ</th>
+                <th class="col-state" onclick="sortBy('positioning_state')">State</th>
+                <th class="col-pct"   onclick="sortBy('pct_1y')">1Y %ile</th>
+                <th class="col-pct"   onclick="sortBy('pct_3y')">3Y %ile</th>
+                <th class="col-ci"    onclick="sortBy('pct_1y')">CI(1Y)</th>
+                <th class="col-z"     onclick="sortBy('z_1y')">1Y Z</th>
+                <th class="col-wow"   onclick="sortBy('wow')">WoW Δ</th>
                 <th class="col-oipct" onclick="sortBy('net_pct_oi')">Net/OI%</th>
+                <th class="col-sig">Signal</th>
               </tr>
             </thead>
             <tbody id="heatmap-body">
@@ -399,6 +413,23 @@ async function triggerRefresh() {
 // ────────────────────────────────────────────────────────────
 // Sidebar
 // ────────────────────────────────────────────────────────────
+function stateClass(state) {
+  if (!state) return 'state-neutral';
+  const s = state.toLowerCase();
+  if (s.includes('extreme') && s.includes('long'))  return 'state-extreme-long';
+  if (s.includes('moderate') && s.includes('long')) return 'state-moderate-long';
+  if (s.includes('extreme') && s.includes('short')) return 'state-extreme-short';
+  if (s.includes('moderate') && s.includes('short'))return 'state-moderate-short';
+  return 'state-neutral';
+}
+
+function sigBadge(m) {
+  if (m.position_signal === 'UNWIND')  return `<span class="sig-pill sig-unwind">UNWIND</span>`;
+  if (m.position_signal === 'SQUEEZE') return `<span class="sig-pill sig-squeeze">SQUEEZE</span>`;
+  if (m.divergence_signal)             return `<span class="sig-pill sig-divg">DIVG</span>`;
+  return '';
+}
+
 function renderSidebar() {
   const el = document.getElementById('market-list');
   let html = '';
@@ -411,6 +442,8 @@ function renderSidebar() {
       let badge = '';
       if (m.pct_1y != null && m.pct_1y <= 10)  badge = `<span class="market-badge badge-lo">LO</span>`;
       if (m.pct_1y != null && m.pct_1y >= 90)   badge = `<span class="market-badge badge-hi">HI</span>`;
+      if (m.position_signal)                     badge = `<span class="market-badge badge-hi">${m.position_signal}</span>`;
+      if (!badge && m.divergence_signal)         badge = `<span class="market-badge" style="background:rgba(210,153,34,0.2);color:#d29922">DIV</span>`;
       html += `<div class="market-btn${sel}" data-code="${m.code}" onclick="selectMarket('${m.code}')">${m.display} ${badge}</div>`;
     }
   }
@@ -455,9 +488,11 @@ function renderHeatmap() {
 
   body.innerHTML = sorted.map(m => {
     const sel = m.code === selectedCode ? ' class="selected"' : '';
-    const p1 = m.pct_1y, p3 = m.pct_3y, p5 = m.pct_5y;
-    const z1 = m.z_1y, z3 = m.z_3y;
+    const p1 = m.pct_1y, p3 = m.pct_3y;
+    const z1 = m.z_1y;
     const wow = m.wow, oi = m.net_pct_oi;
+    const cat = m.categories ? m.categories[m.primary_cat] : null;
+    const ci1 = cat ? cat.cot_index_1y : null;
 
     function pctCell(p) {
       if (p == null) return '<td>—</td>';
@@ -467,14 +502,26 @@ function renderHeatmap() {
       if (z == null) return '<td>—</td>';
       return `<td class="z-cell" style="color:${zColor(z)}">${z >= 0 ? '+' : ''}${z.toFixed(2)}</td>`;
     }
+    function ciCell(v) {
+      if (v == null) return '<td>—</td>';
+      const col = v >= 90 ? 'var(--red)' : v >= 70 ? 'var(--orange)' : v <= 10 ? 'var(--green)' : v <= 30 ? 'var(--accent)' : 'var(--muted)';
+      return `<td style="color:${col};font-weight:bold">${v.toFixed(0)}</td>`;
+    }
+
+    const state = m.positioning_state || 'NEUTRAL';
+    const sc = stateClass(state);
+    const sig = sigBadge(m);
 
     return `<tr${sel} onclick="selectMarket('${m.code}', true)">
       <td>${m.display}</td>
       <td style="color:var(--muted);font-size:11px">${m.asset_class}</td>
-      ${pctCell(p1)}${pctCell(p3)}${pctCell(p5)}
-      ${zCell(z1)}${zCell(z3)}
+      <td><span class="state-pill ${sc}">${state}</span></td>
+      ${pctCell(p1)}${pctCell(p3)}
+      ${ciCell(ci1)}
+      ${zCell(z1)}
       <td class="${wow >= 0 ? 'wow-pos' : 'wow-neg'}">${fmtK(wow)}</td>
       <td style="color:${oi >= 0 ? 'var(--green)' : 'var(--red)'}">${oi != null ? (oi >= 0 ? '+' : '') + oi.toFixed(2) + '%' : '—'}</td>
+      <td>${sig}</td>
     </tr>`;
   }).join('');
 }
@@ -539,6 +586,8 @@ function renderDetail(m) {
     const c2 = cats[k];
     const isPrimary = k === pcat;
     const name = k.replace(/_/g,' ').replace(/\b\w/g, l => l.toUpperCase());
+    const ci = c2.cot_index_1y;
+    const ciCol = ci >= 80 ? 'var(--red)' : ci <= 20 ? 'var(--green)' : 'var(--muted)';
     return `<tr class="${isPrimary ? 'primary-row' : ''}">
       <td>${name}${isPrimary ? ' ★' : ''}</td>
       <td style="color:${c2.net >= 0 ? 'var(--green)' : 'var(--red)'}">${fmtK(c2.net)}</td>
@@ -547,20 +596,58 @@ function renderDetail(m) {
       <td>${c2.pct_1y != null ? `<span style="color:${pctColor(c2.pct_1y)}">${c2.pct_1y.toFixed(1)}</span>` : '—'}</td>
       <td>${c2.pct_3y != null ? `<span style="color:${pctColor(c2.pct_3y)}">${c2.pct_3y.toFixed(1)}</span>` : '—'}</td>
       <td style="color:${zColor(c2.z_1y)}">${c2.z_1y != null ? (c2.z_1y >= 0 ? '+' : '') + c2.z_1y.toFixed(2) : '—'}</td>
+      <td style="color:${ciCol}">${ci != null ? ci.toFixed(0) : '—'}</td>
     </tr>`;
   }).join('');
 
-  // Percentile bars
-  function pctBar(label, p) {
-    if (p == null) return '';
-    const col = pctColor(p);
-    return `<div class="pct-bar-row">
+  // Positioning state styling
+  const stateColors = {
+    'EXTREME LONG':   { bg:'rgba(248,81,73,0.12)',  border:'#f85149', text:'#f85149' },
+    'MODERATE LONG':  { bg:'rgba(240,136,62,0.1)',  border:'#f0883e', text:'#f0883e' },
+    'EXTREME SHORT':  { bg:'rgba(63,185,80,0.12)',  border:'#3fb950', text:'#3fb950' },
+    'MODERATE SHORT': { bg:'rgba(88,166,255,0.1)',  border:'#58a6ff', text:'#58a6ff' },
+    'NEUTRAL':        { bg:'rgba(139,148,158,0.06)',border:'#444c56', text:'#8b949e' },
+  };
+  const sc2 = stateColors[m.positioning_state] || stateColors['NEUTRAL'];
+  const sizeGuide = {
+    'EXTREME LONG':   '0–25% size · no new longs · de-risk existing · consider puts',
+    'MODERATE LONG':  '50–75% size · tighter stops · reduced profit target',
+    'EXTREME SHORT':  '0–25% size · no new shorts · watch for squeeze',
+    'MODERATE SHORT': '50–75% size · tighter stops · reduced profit target',
+    'NEUTRAL':        '100% size · full position · normal ATR stops and targets',
+  };
+  const guide = sizeGuide[m.positioning_state] || sizeGuide['NEUTRAL'];
+
+  // Dual bar: percentile + COT Index side by side
+  function dualBar(label, pct, ci) {
+    if (pct == null) return '';
+    const col = pctColor(pct);
+    const ciCol = ci >= 90 ? 'var(--red)' : ci >= 70 ? 'var(--orange)' : ci <= 10 ? 'var(--green)' : ci <= 30 ? 'var(--accent)' : 'var(--muted)';
+    return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
       <span class="pct-bar-label">${label}</span>
-      <div class="pct-bar-track">
-        <div class="pct-bar-fill" style="width:${p}%;background:${col}"></div>
+      <div style="flex:1;display:flex;flex-direction:column;gap:3px">
+        <div style="display:flex;align-items:center;gap:5px">
+          <span style="font-size:9px;color:var(--muted);width:22px">%ile</span>
+          <div class="pct-bar-track" style="flex:1"><div class="pct-bar-fill" style="width:${pct}%;background:${col}"></div></div>
+          <span style="font-size:11px;font-weight:bold;color:${col};width:36px;text-align:right">${pct.toFixed(1)}</span>
+        </div>
+        ${ci != null ? `<div style="display:flex;align-items:center;gap:5px">
+          <span style="font-size:9px;color:var(--muted);width:22px">CI</span>
+          <div class="pct-bar-track" style="flex:1"><div class="pct-bar-fill" style="width:${ci}%;background:${ciCol}"></div></div>
+          <span style="font-size:11px;font-weight:bold;color:${ciCol};width:36px;text-align:right">${ci.toFixed(0)}</span>
+        </div>` : ''}
       </div>
-      <span class="pct-bar-value" style="color:${col}">${p.toFixed(1)}</span>
     </div>`;
+  }
+
+  // Signals panel
+  let signalHtml = '';
+  if (m.position_signal || m.divergence_signal) {
+    const parts = [];
+    if (m.position_signal === 'UNWIND')  parts.push(`<div style="color:var(--red)"><b>UNWIND SIGNAL</b> — extreme long with significant weekly reduction. Crowd exiting. De-risk immediately; consider tight stops or puts.</div>`);
+    if (m.position_signal === 'SQUEEZE') parts.push(`<div style="color:var(--green)"><b>SQUEEZE SIGNAL</b> — extreme short with significant weekly addition. Forced covering risk. Asymmetric long setup if price confirms.</div>`);
+    if (m.divergence_signal) parts.push(`<div style="color:var(--gold)"><b>DIVERGENCE:</b> ${m.divergence_signal} — informed money and speculators on opposite sides. Classic high-conviction setup: wait for price action confirmation before fading the crowd.</div>`);
+    signalHtml = `<div style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px 14px;display:flex;flex-direction:column;gap:6px;font-size:12px;line-height:1.5;font-family:var(--font-sans)">${parts.join('')}</div>`;
   }
 
   c.innerHTML = `
@@ -570,6 +657,13 @@ function renderDetail(m) {
       <span class="d-date">as of ${m.latest_date || '—'} (Tue close)</span>
       ${alignHtml}
     </div>
+
+    <div style="background:${sc2.bg};border:1px solid ${sc2.border};border-radius:6px;padding:9px 14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
+      <div style="font-size:13px;font-weight:bold;color:${sc2.text}">${m.positioning_state}</div>
+      <div style="font-size:11px;color:${sc2.text};opacity:0.9">${guide}</div>
+    </div>
+
+    ${signalHtml}
 
     <div class="d-metrics">
       <div class="d-metric">
@@ -592,19 +686,23 @@ function renderDetail(m) {
         <div class="label">1Y Z-SCORE</div>
         <div class="value" style="color:${zColor(cat ? cat.z_1y : null)}">${cat && cat.z_1y != null ? (cat.z_1y >= 0 ? '+' : '') + cat.z_1y.toFixed(2) : '—'}</div>
       </div>
+      <div class="d-metric">
+        <div class="label">COT INDEX (1Y)</div>
+        <div class="value" style="color:${cat && cat.cot_index_1y >= 80 ? 'var(--red)' : cat && cat.cot_index_1y <= 20 ? 'var(--green)' : 'var(--text)'}">${cat && cat.cot_index_1y != null ? cat.cot_index_1y.toFixed(0) + '/100' : '—'}</div>
+      </div>
     </div>
 
     <div>
-      <div class="d-section-title">PERCENTILE RANKS (primary category: ${pcat.replace(/_/g,' ')})</div>
-      ${pctBar('1Y', cat ? cat.pct_1y : null)}
-      ${pctBar('3Y', cat ? cat.pct_3y : null)}
-      ${pctBar('5Y', cat ? cat.pct_5y : null)}
+      <div class="d-section-title">PERCENTILE RANK &amp; COT INDEX (primary: ${pcat.replace(/_/g,' ')})</div>
+      ${dualBar('1Y', cat ? cat.pct_1y : null, cat ? cat.cot_index_1y : null)}
+      ${dualBar('3Y', cat ? cat.pct_3y : null, cat ? cat.cot_index_3y : null)}
+      ${dualBar('5Y', cat ? cat.pct_5y : null, null)}
     </div>
 
     <div>
       <div class="d-section-title">ALL CATEGORIES</div>
       <table class="d-cats">
-        <thead><tr><th>Category</th><th>Net</th><th>Net/OI%</th><th>WoW</th><th>1Y%</th><th>3Y%</th><th>1Y Z</th></tr></thead>
+        <thead><tr><th>Category</th><th>Net</th><th>Net/OI%</th><th>WoW</th><th>1Y%</th><th>3Y%</th><th>1Y Z</th><th>CI(1Y)</th></tr></thead>
         <tbody>${catRows}</tbody>
       </table>
     </div>
