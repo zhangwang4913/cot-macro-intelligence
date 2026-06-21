@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>COT Macro Intelligence</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0d1117;
+  --card:      #161b22;
+  --card2:     #1c2330;
+  --border:    #30363d;
+  --border2:   #21262d;
+  --text:      #c9d1d9;
+  --muted:     #8b949e;
+  --accent:    #58a6ff;
+  --gold:      #d29922;
+  --green:     #3fb950;
+  --red:       #f85149;
+  --orange:    #f0883e;
+  --purple:    #bc8cff;
+  --r-lo:      #2d4a3e;
+  --r-hi:      #4a2d2d;
+  --font:      'Courier New', Consolas, monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 13px; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+/* ── Header ──────────────────────────────────────────────── */
+#header {
+  display: flex; align-items: center; gap: 16px;
+  padding: 8px 16px; background: var(--card); border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+#header h1 { font-size: 14px; font-weight: bold; color: var(--accent); letter-spacing: 2px; white-space: nowrap; }
+#header-status { font-size: 11px; color: var(--muted); flex: 1; }
+#header-status span { color: var(--text); }
+.hdr-btn {
+  padding: 4px 12px; font-size: 11px; font-family: var(--font); background: var(--card2);
+  color: var(--accent); border: 1px solid var(--border); border-radius: 4px; cursor: pointer;
+  white-space: nowrap;
+}
+.hdr-btn:hover { background: var(--border); }
+.hdr-btn.danger { color: var(--orange); }
+#refresh-spinner { display: none; width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Layout ────────────────────────────────────────────────── */
+#body { display: flex; flex: 1; overflow: hidden; }
+
+/* ── Sidebar ────────────────────────────────────────────────── */
+#sidebar {
+  width: 190px; flex-shrink: 0; background: var(--card); border-right: 1px solid var(--border);
+  overflow-y: auto; display: flex; flex-direction: column;
+}
+.group-header {
+  padding: 6px 10px 4px; font-size: 10px; letter-spacing: 1.5px; font-weight: bold;
+  color: var(--muted); background: var(--bg); position: sticky; top: 0; z-index: 1;
+  border-bottom: 1px solid var(--border2);
+}
+.market-btn {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 5px 12px; cursor: pointer; color: var(--muted); font-size: 12px;
+  border-left: 3px solid transparent; transition: all 0.1s;
+}
+.market-btn:hover { background: var(--card2); color: var(--text); }
+.market-btn.selected { background: var(--card2); color: var(--accent); border-left-color: var(--accent); }
+.market-badge {
+  font-size: 9px; padding: 1px 4px; border-radius: 3px; font-weight: bold;
+}
+.badge-lo { background: var(--r-lo); color: var(--green); }
+.badge-hi { background: var(--r-hi); color: var(--red); }
+
+/* ── Main content ───────────────────────────────────────────── */
+#main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+
+/* ── Tabs ────────────────────────────────────────────────────── */
+#tabs { display: flex; border-bottom: 1px solid var(--border); flex-shrink: 0; background: var(--card); }
+.tab-btn { padding: 7px 16px; font-size: 12px; font-family: var(--font); cursor: pointer; color: var(--muted); border-bottom: 2px solid transparent; background: none; border-left: none; border-right: none; border-top: none; }
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+#tab-content { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+.tab-pane { display: none; flex: 1; overflow: auto; }
+.tab-pane.active { display: flex; flex-direction: column; }
+
+/* ── Heatmap ─────────────────────────────────────────────────── */
+#heatmap-wrap { flex: 1; overflow: auto; }
+#heatmap-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+#heatmap-table th {
+  padding: 6px 10px; background: var(--card); color: var(--muted); font-size: 10px;
+  font-weight: bold; letter-spacing: 0.5px; text-align: right; position: sticky; top: 0; z-index: 2;
+  border-bottom: 2px solid var(--border); cursor: pointer; white-space: nowrap; user-select: none;
+}
+#heatmap-table th:first-child, #heatmap-table th:nth-child(2) { text-align: left; }
+#heatmap-table th:hover { color: var(--accent); }
+#heatmap-table th.sort-asc::after  { content: ' ↑'; color: var(--accent); }
+#heatmap-table th.sort-desc::after { content: ' ↓'; color: var(--accent); }
+#heatmap-table td {
+  padding: 5px 10px; font-size: 12px; text-align: right;
+  border-bottom: 1px solid var(--border2); white-space: nowrap;
+}
+#heatmap-table td:first-child { text-align: left; font-weight: bold; }
+#heatmap-table td:nth-child(2) { text-align: left; }
+#heatmap-table tr { cursor: pointer; transition: background 0.1s; }
+#heatmap-table tr:hover td { background: var(--card2); }
+#heatmap-table tr.selected td { background: #1e2b3e; }
+.pct-cell { font-weight: bold; padding: 3px 8px; border-radius: 3px; display: inline-block; min-width: 38px; text-align: center; }
+.z-cell { font-weight: bold; }
+.wow-pos { color: var(--green); }
+.wow-neg { color: var(--red); }
+.col-name { width: 120px; }
+.col-class { width: 80px; }
+.col-pct  { width: 70px; }
+.col-z    { width: 60px; }
+.col-wow  { width: 80px; }
+.col-oipct{ width: 70px; }
+
+/* ── Detail tab ─────────────────────────────────────────────── */
+#detail-pane { padding: 16px 20px; overflow-y: auto; gap: 14px; }
+#detail-empty { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 13px; }
+#detail-content { display: none; flex-direction: column; gap: 14px; }
+
+.d-header { display: flex; align-items: baseline; gap: 12px; }
+.d-title { font-size: 18px; font-weight: bold; color: var(--accent); }
+.d-date  { font-size: 11px; color: var(--muted); }
+.d-class { font-size: 11px; color: var(--gold); padding: 1px 6px; border: 1px solid var(--gold); border-radius: 3px; opacity: 0.8; }
+
+.d-metrics { display: flex; gap: 20px; flex-wrap: wrap; }
+.d-metric { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 10px 14px; min-width: 110px; }
+.d-metric .label { font-size: 10px; color: var(--muted); letter-spacing: 0.5px; margin-bottom: 4px; }
+.d-metric .value { font-size: 16px; font-weight: bold; }
+
+.d-section-title { font-size: 10px; color: var(--muted); letter-spacing: 1px; font-weight: bold; margin-bottom: 6px; }
+
+.pct-bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.pct-bar-label { font-size: 11px; color: var(--muted); width: 24px; }
+.pct-bar-track { flex: 1; height: 10px; background: var(--card2); border-radius: 5px; overflow: hidden; position: relative; }
+.pct-bar-fill  { height: 100%; border-radius: 5px; transition: width 0.4s ease; }
+.pct-bar-value { font-size: 11px; font-weight: bold; width: 40px; text-align: right; }
+
+.d-cats { width: 100%; border-collapse: collapse; }
+.d-cats th { padding: 4px 8px; font-size: 10px; color: var(--muted); font-weight: bold; text-align: right; border-bottom: 1px solid var(--border); }
+.d-cats th:first-child { text-align: left; }
+.d-cats td { padding: 4px 8px; font-size: 11px; text-align: right; border-bottom: 1px solid var(--border2); }
+.d-cats td:first-child { text-align: left; font-weight: bold; color: var(--text); }
+.primary-row td { background: rgba(88,166,255,0.06); }
+
+.align-badge { display: inline-block; padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: bold; }
+.align-long  { background: rgba(248,81,73,0.15);  color: var(--red);    border: 1px solid rgba(248,81,73,0.3); }
+.align-short { background: rgba(63,185,80,0.15);  color: var(--green);  border: 1px solid rgba(63,185,80,0.3); }
+.align-div   { background: rgba(210,153,34,0.15); color: var(--gold);   border: 1px solid rgba(210,153,34,0.3); }
+
+/* ── Sparkline/chart ──────────────────────────────────────────── */
+#chart-wrap { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; }
+#chart-title { font-size: 10px; color: var(--muted); letter-spacing: 0.5px; margin-bottom: 8px; }
+#chart-svg-wrap { position: relative; }
+.chart-loading { display: flex; align-items: center; justify-content: center; height: 80px; color: var(--muted); font-size: 12px; }
+
+/* ── Insight panel ────────────────────────────────────────────── */
+#insight-panel {
+  height: 200px; flex-shrink: 0; border-top: 1px solid var(--border);
+  display: flex; flex-direction: column; background: var(--bg);
+}
+#insight-header {
+  display: flex; align-items: center; gap: 8px; padding: 5px 12px;
+  background: var(--card); border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+#insight-label { font-size: 10px; color: var(--muted); letter-spacing: 1px; font-weight: bold; flex: 1; }
+.ins-btn { padding: 3px 10px; font-size: 10px; font-family: var(--font); background: var(--card2); color: var(--accent); border: 1px solid var(--border); border-radius: 3px; cursor: pointer; }
+.ins-btn:hover { background: var(--border); }
+.ins-btn.force { color: var(--orange); }
+#insight-spinner { display: none; width: 10px; height: 10px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; }
+#insight-body { flex: 1; overflow-y: auto; padding: 10px 14px; font-size: 12px; line-height: 1.6; color: var(--text); white-space: pre-wrap; font-family: var(--font-sans); }
+#insight-body.placeholder { color: var(--muted); font-family: var(--font); font-size: 11px; }
+
+/* ── Footer ──────────────────────────────────────────────────── */
+#footer {
+  display: flex; gap: 16px; padding: 4px 14px; background: var(--card);
+  border-top: 1px solid var(--border); flex-shrink: 0; font-size: 10px; color: var(--muted);
+}
+#footer span { white-space: nowrap; }
+#footer kbd { background: var(--card2); border: 1px solid var(--border); border-radius: 2px; padding: 0 4px; color: var(--text); }
+
+/* ── Toasts ──────────────────────────────────────────────────── */
+#toast { position: fixed; bottom: 40px; right: 20px; background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 8px 14px; font-size: 12px; max-width: 300px; display: none; z-index: 999; }
+#toast.ok  { border-color: var(--green); color: var(--green); }
+#toast.err { border-color: var(--red);   color: var(--red); }
+
+/* Scrollbars */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div id="header">
+  <h1>COT MACRO INTELLIGENCE</h1>
+  <div id="header-status">DB: <span id="stat-rows">—</span> rows &nbsp;|&nbsp; Latest: <span id="stat-date">—</span> &nbsp;|&nbsp; Markets: <span id="stat-markets">—</span></div>
+  <div id="refresh-spinner"></div>
+  <button class="hdr-btn" onclick="loadMetrics()">↻ Reload</button>
+  <button class="hdr-btn danger" onclick="triggerRefresh()">⬇ Fetch CFTC</button>
+  <button class="hdr-btn" onclick="getMacroInsight(false)">⊕ Macro Analysis</button>
+</div>
+
+<!-- Body -->
+<div id="body">
+  <!-- Sidebar -->
+  <div id="sidebar">
+    <div id="market-list">
+      <div style="padding:20px; color:var(--muted); font-size:11px;">Loading markets…</div>
+    </div>
+  </div>
+
+  <!-- Main -->
+  <div id="main">
+    <!-- Tabs -->
+    <div id="tabs">
+      <button class="tab-btn active" onclick="switchTab('heatmap', this)">Heatmap</button>
+      <button class="tab-btn" onclick="switchTab('detail', this)">Detail</button>
+    </div>
+
+    <div id="tab-content">
+      <!-- Heatmap tab -->
+      <div id="pane-heatmap" class="tab-pane active">
+        <div id="heatmap-wrap">
+          <table id="heatmap-table">
+            <thead>
+              <tr>
+                <th class="col-name" onclick="sortBy('display')">Market</th>
+                <th class="col-class" onclick="sortBy('asset_class')">Class</th>
+                <th class="col-pct" onclick="sortBy('pct_1y')">1Y %ile</th>
+                <th class="col-pct" onclick="sortBy('pct_3y')">3Y %ile</th>
+                <th class="col-pct" onclick="sortBy('pct_5y')">5Y %ile</th>
+                <th class="col-z" onclick="sortBy('z_1y')">1Y Z</th>
+                <th class="col-z" onclick="sortBy('z_3y')">3Y Z</th>
+                <th class="col-wow" onclick="sortBy('wow')">WoW Δ</th>
+                <th class="col-oipct" onclick="sortBy('net_pct_oi')">Net/OI%</th>
+              </tr>
+            </thead>
+            <tbody id="heatmap-body">
+              <tr><td colspan="9" style="text-align:center; padding:20px; color:var(--muted)">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Detail tab -->
+      <div id="pane-detail" class="tab-pane">
+        <div id="detail-pane">
+          <div id="detail-empty">← Select a market from the sidebar or heatmap</div>
+          <div id="detail-content"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Insight panel -->
+    <div id="insight-panel">
+      <div id="insight-header">
+        <span id="insight-label">INSIGHT — no market selected</span>
+        <div id="insight-spinner"></div>
+        <button class="ins-btn" id="btn-insight" onclick="getMarketInsight(false)" title="I">⚡ Insight</button>
+        <button class="ins-btn force" id="btn-insight-force" onclick="getMarketInsight(true)" title="Shift+I">↺ Refresh</button>
+        <button class="ins-btn" onclick="getMacroInsight(false)" title="M">⊕ Macro</button>
+      </div>
+      <div id="insight-body" class="placeholder">Press [I] for market insight · [M] for macro analysis · [Shift+I] to force-refresh</div>
+    </div>
+  </div>
+</div>
+
+<!-- Footer -->
+<div id="footer">
+  <span><kbd>I</kbd> Market Insight</span>
+  <span><kbd>Shift+I</kbd> Force Refresh</span>
+  <span><kbd>M</kbd> Macro Analysis</span>
+  <span><kbd>R</kbd> Reload Data</span>
+  <span><kbd>1</kbd>/<kbd>2</kbd> Switch Tab</span>
+  <span><kbd>↑</kbd>/<kbd>↓</kbd> Navigate Markets</span>
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<script>
+// ────────────────────────────────────────────────────────────
+// State
+// ────────────────────────────────────────────────────────────
+let allMarkets = [];
+let selectedCode = null;
+let sortKey = 'pct_1y';
+let sortDir = 1; // 1 = asc, -1 = desc
+let historyCache = {};
+
+const GROUPS = [
+  { label: 'COMMODITIES', filter: m => m.asset_class === 'commodity' },
+  { label: 'FX',          filter: m => m.asset_class === 'fx' },
+  { label: 'EQUITIES',    filter: m => m.asset_class === 'equity' },
+  { label: 'RATES',       filter: m => m.asset_class === 'rates' },
+  { label: 'CRYPTO',      filter: m => m.asset_class === 'crypto' },
+];
+
+// ────────────────────────────────────────────────────────────
+// Utilities
+// ────────────────────────────────────────────────────────────
+function fmt(v, digits=1) {
+  if (v == null || isNaN(v)) return '—';
+  return v.toFixed(digits);
+}
+function fmtK(v) {
+  if (v == null || isNaN(v)) return '—';
+  const s = v >= 0 ? '+' : '';
+  if (Math.abs(v) >= 1000) return s + (v/1000).toFixed(1) + 'K';
+  return s + v.toLocaleString();
+}
+function pctColor(p) {
+  if (p == null) return '';
+  if (p <= 10)  return '#f85149';
+  if (p <= 20)  return '#f0883e';
+  if (p >= 90)  return '#f85149';
+  if (p >= 80)  return '#f0883e';
+  if (p >= 60)  return '#3fb950';
+  if (p <= 40)  return '#58a6ff';
+  return '#c9d1d9';
+}
+function pctBg(p) {
+  if (p == null) return '';
+  if (p <= 10 || p >= 90) return p >= 90 ? 'rgba(248,81,73,0.2)' : 'rgba(248,81,73,0.2)';
+  if (p <= 20 || p >= 80) return 'rgba(240,136,62,0.15)';
+  return '';
+}
+function zColor(z) {
+  if (z == null) return '';
+  if (z >= 2.5)  return '#f85149';
+  if (z >= 1.5)  return '#f0883e';
+  if (z >= 0.5)  return '#d29922';
+  if (z <= -2.5) return '#3fb950';
+  if (z <= -1.5) return '#58a6ff';
+  if (z <= -0.5) return '#58a6ff';
+  return '#8b949e';
+}
+function toast(msg, type='ok', ms=3000) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.className = type; t.style.display = 'block';
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => { t.style.display = 'none'; }, ms);
+}
+function setSpinner(id, on) {
+  document.getElementById(id).style.display = on ? 'block' : 'none';
+}
+
+// ────────────────────────────────────────────────────────────
+// Data loading
+// ────────────────────────────────────────────────────────────
+async function loadMetrics() {
+  setSpinner('refresh-spinner', true);
+  try {
+    const r = await fetch('/api/metrics');
+    if (!r.ok) { const e = await r.json(); throw new Error(e.error || r.statusText); }
+    const data = await r.json();
+    allMarkets = data.markets || [];
+
+    // DB stats
+    const s = data.db_stats || {};
+    document.getElementById('stat-rows').textContent    = s.total_rows ? parseInt(s.total_rows).toLocaleString() : '—';
+    document.getElementById('stat-date').textContent    = s.latest_date || '—';
+    document.getElementById('stat-markets').textContent = s.market_count || allMarkets.length;
+
+    renderSidebar();
+    renderHeatmap();
+    if (selectedCode) refreshDetailSilent();
+  } catch(e) {
+    toast('Load failed: ' + e.message, 'err');
+  } finally {
+    setSpinner('refresh-spinner', false);
+  }
+}
+
+async function triggerRefresh() {
+  setSpinner('refresh-spinner', true);
+  toast('Fetching CFTC data…', 'ok', 15000);
+  try {
+    const r = await fetch('/api/refresh', { method: 'POST' });
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    toast(`Refresh complete — ${d.rows_added} rows added, latest: ${d.latest_date}`, 'ok', 5000);
+    await loadMetrics();
+  } catch(e) {
+    toast('Refresh failed: ' + e.message, 'err', 6000);
+  } finally {
+    setSpinner('refresh-spinner', false);
+  }
+}
+
+// ────────────────────────────────────────────────────────────
+// Sidebar
+// ────────────────────────────────────────────────────────────
+function renderSidebar() {
+  const el = document.getElementById('market-list');
+  let html = '';
+  for (const g of GROUPS) {
+    const markets = allMarkets.filter(g.filter);
+    if (!markets.length) continue;
+    html += `<div class="group-header">${g.label}</div>`;
+    for (const m of markets) {
+      const sel = m.code === selectedCode ? ' selected' : '';
+      let badge = '';
+      if (m.pct_1y != null && m.pct_1y <= 10)  badge = `<span class="market-badge badge-lo">LO</span>`;
+      if (m.pct_1y != null && m.pct_1y >= 90)   badge = `<span class="market-badge badge-hi">HI</span>`;
+      html += `<div class="market-btn${sel}" data-code="${m.code}" onclick="selectMarket('${m.code}')">${m.display} ${badge}</div>`;
+    }
+  }
+  el.innerHTML = html;
+}
+
+// ────────────────────────────────────────────────────────────
+// Heatmap
+// ────────────────────────────────────────────────────────────
+function sortBy(key) {
+  const ths = document.querySelectorAll('#heatmap-table th');
+  ths.forEach(th => th.classList.remove('sort-asc', 'sort-desc'));
+  const keys = ['display','asset_class','pct_1y','pct_3y','pct_5y','z_1y','z_3y','wow','net_pct_oi'];
+  const idx = keys.indexOf(key);
+  if (idx >= 0) {
+    const th = ths[idx];
+    if (sortKey === key) {
+      sortDir *= -1;
+    } else {
+      sortKey = key; sortDir = (key === 'display' || key === 'asset_class') ? 1 : -1;
+    }
+    th.classList.add(sortDir === 1 ? 'sort-asc' : 'sort-desc');
+  }
+  renderHeatmap();
+}
+
+function renderHeatmap() {
+  const sorted = [...allMarkets].sort((a, b) => {
+    const va = a[sortKey], vb = b[sortKey];
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1;
+    if (vb == null) return -1;
+    if (typeof va === 'string') return sortDir * va.localeCompare(vb);
+    return sortDir * (va - vb);
+  });
+
+  const body = document.getElementById('heatmap-body');
+  if (!sorted.length) {
+    body.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:20px;color:var(--muted)">No data</td></tr>';
+    return;
+  }
+
+  body.innerHTML = sorted.map(m => {
+    const sel = m.code === selectedCode ? ' class="selected"' : '';
+    const p1 = m.pct_1y, p3 = m.pct_3y, p5 = m.pct_5y;
+    const z1 = m.z_1y, z3 = m.z_3y;
+    const wow = m.wow, oi = m.net_pct_oi;
+
+    function pctCell(p) {
+      if (p == null) return '<td>—</td>';
+      return `<td><span class="pct-cell" style="color:${pctColor(p)};background:${pctBg(p)}">${p.toFixed(1)}</span></td>`;
+    }
+    function zCell(z) {
+      if (z == null) return '<td>—</td>';
+      return `<td class="z-cell" style="color:${zColor(z)}">${z >= 0 ? '+' : ''}${z.toFixed(2)}</td>`;
+    }
+
+    return `<tr${sel} onclick="selectMarket('${m.code}', true)">
+      <td>${m.display}</td>
+      <td style="color:var(--muted);font-size:11px">${m.asset_class}</td>
+      ${pctCell(p1)}${pctCell(p3)}${pctCell(p5)}
+      ${zCell(z1)}${zCell(z3)}
+      <td class="${wow >= 0 ? 'wow-pos' : 'wow-neg'}">${fmtK(wow)}</td>
+      <td style="color:${oi >= 0 ? 'var(--green)' : 'var(--red)'}">${oi != null ? (oi >= 0 ? '+' : '') + oi.toFixed(2) + '%' : '—'}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ────────────────────────────────────────────────────────────
+// Market selection
+// ────────────────────────────────────────────────────────────
+function selectMarket(code, switchToDetail=false) {
+  selectedCode = code;
+  // Update sidebar
+  document.querySelectorAll('.market-btn').forEach(el => {
+    el.classList.toggle('selected', el.dataset.code === code);
+  });
+  // Update heatmap row
+  document.querySelectorAll('#heatmap-table tr').forEach(tr => {
+    tr.classList.toggle('selected', tr.querySelector('td') && tr.onclick && tr.onclick.toString().includes(`'${code}'`));
+  });
+  renderHeatmap(); // re-render to reflect selection
+
+  const m = allMarkets.find(x => x.code === code);
+  if (!m) return;
+
+  document.getElementById('insight-label').textContent = `INSIGHT — ${m.display}`;
+  renderDetail(m);
+
+  if (switchToDetail) {
+    const tab = document.querySelector('.tab-btn:not(:first-child)');
+    switchTab('detail', tab);
+  }
+}
+
+function refreshDetailSilent() {
+  const m = allMarkets.find(x => x.code === selectedCode);
+  if (m) renderDetail(m);
+}
+
+// ────────────────────────────────────────────────────────────
+// Detail view
+// ────────────────────────────────────────────────────────────
+function renderDetail(m) {
+  document.getElementById('detail-empty').style.display = 'none';
+  const c = document.getElementById('detail-content');
+  c.style.display = 'flex';
+
+  const pcat = m.primary_cat;
+  const cat  = m.categories ? m.categories[pcat] : null;
+
+  // Alignment badge
+  let alignHtml = '';
+  if (m.alignment_label) {
+    const cls = m.alignment_label.includes('LONG') ? 'align-long' : m.alignment_label.includes('SHORT') ? 'align-short' : 'align-div';
+    alignHtml = `<span class="align-badge ${cls}">${m.alignment_label}</span>`;
+  }
+
+  // Category table rows
+  const catOrder = m.report_type === 'tff'
+    ? ['lev_money','asset_mgr','dealer','other_rept','nonrept']
+    : ['managed_money','swap_dealers','producers','other_rept','nonrept'];
+
+  const cats = m.categories || {};
+  const catRows = catOrder.filter(k => cats[k]).map(k => {
+    const c2 = cats[k];
+    const isPrimary = k === pcat;
+    const name = k.replace(/_/g,' ').replace(/\b\w/g, l => l.toUpperCase());
+    return `<tr class="${isPrimary ? 'primary-row' : ''}">
+      <td>${name}${isPrimary ? ' ★' : ''}</td>
+      <td style="color:${c2.net >= 0 ? 'var(--green)' : 'var(--red)'}">${fmtK(c2.net)}</td>
+      <td style="color:${c2.net_pct_oi >= 0 ? 'var(--green)' : 'var(--red)'}">${c2.net_pct_oi != null ? (c2.net_pct_oi >= 0 ? '+' : '') + c2.net_pct_oi.toFixed(2) + '%' : '—'}</td>
+      <td class="${c2.wow >= 0 ? 'wow-pos' : 'wow-neg'}">${fmtK(c2.wow)}</td>
+      <td>${c2.pct_1y != null ? `<span style="color:${pctColor(c2.pct_1y)}">${c2.pct_1y.toFixed(1)}</span>` : '—'}</td>
+      <td>${c2.pct_3y != null ? `<span style="color:${pctColor(c2.pct_3y)}">${c2.pct_3y.toFixed(1)}</span>` : '—'}</td>
+      <td style="color:${zColor(c2.z_1y)}">${c2.z_1y != null ? (c2.z_1y >= 0 ? '+' : '') + c2.z_1y.toFixed(2) : '—'}</td>
+    </tr>`;
+  }).join('');
+
+  // Percentile bars
+  function pctBar(label, p) {
+    if (p == null) return '';
+    const col = pctColor(p);
+    return `<div class="pct-bar-row">
+      <span class="pct-bar-label">${label}</span>
+      <div class="pct-bar-track">
+        <div class="pct-bar-fill" style="width:${p}%;background:${col}"></div>
+      </div>
+      <span class="pct-bar-value" style="color:${col}">${p.toFixed(1)}</span>
+    </div>`;
+  }
+
+  c.innerHTML = `
+    <div class="d-header">
+      <span class="d-title">${m.display}</span>
+      <span class="d-class">${m.asset_class.toUpperCase()}</span>
+      <span class="d-date">as of ${m.latest_date || '—'} (Tue close)</span>
+      ${alignHtml}
+    </div>
+
+    <div class="d-metrics">
+      <div class="d-metric">
+        <div class="label">NET CONTRACTS</div>
+        <div class="value" style="color:${cat && cat.net >= 0 ? 'var(--green)' : 'var(--red)'}">${fmtK(cat ? cat.net : null)}</div>
+      </div>
+      <div class="d-metric">
+        <div class="label">NET / OI %</div>
+        <div class="value" style="color:${cat && cat.net_pct_oi >= 0 ? 'var(--green)' : 'var(--red)'}">${cat && cat.net_pct_oi != null ? (cat.net_pct_oi >= 0 ? '+' : '') + cat.net_pct_oi.toFixed(2) + '%' : '—'}</div>
+      </div>
+      <div class="d-metric">
+        <div class="label">WoW CHANGE</div>
+        <div class="value ${cat && cat.wow >= 0 ? 'wow-pos' : 'wow-neg'}">${fmtK(cat ? cat.wow : null)}</div>
+      </div>
+      <div class="d-metric">
+        <div class="label">OPEN INTEREST</div>
+        <div class="value" style="color:var(--text)">${cat && cat.oi ? cat.oi.toLocaleString() : '—'}</div>
+      </div>
+      <div class="d-metric">
+        <div class="label">1Y Z-SCORE</div>
+        <div class="value" style="color:${zColor(cat ? cat.z_1y : null)}">${cat && cat.z_1y != null ? (cat.z_1y >= 0 ? '+' : '') + cat.z_1y.toFixed(2) : '—'}</div>
+      </div>
+    </div>
+
+    <div>
+      <div class="d-section-title">PERCENTILE RANKS (primary category: ${pcat.replace(/_/g,' ')})</div>
+      ${pctBar('1Y', cat ? cat.pct_1y : null)}
+      ${pctBar('3Y', cat ? cat.pct_3y : null)}
+      ${pctBar('5Y', cat ? cat.pct_5y : null)}
+    </div>
+
+    <div>
+      <div class="d-section-title">ALL CATEGORIES</div>
+      <table class="d-cats">
+        <thead><tr><th>Category</th><th>Net</th><th>Net/OI%</th><th>WoW</th><th>1Y%</th><th>3Y%</th><th>1Y Z</th></tr></thead>
+        <tbody>${catRows}</tbody>
+      </table>
+    </div>
+
+    <div id="chart-wrap">
+      <div id="chart-title">NET POSITION HISTORY — ${m.display} (${pcat.replace(/_/g,' ')}, 2Y)</div>
+      <div id="chart-svg-wrap"><div class="chart-loading">Loading chart…</div></div>
+    </div>
+  `;
+
+  loadChart(m.code, pcat);
+}
+
+// ────────────────────────────────────────────────────────────
+// Chart (SVG line chart)
+// ────────────────────────────────────────────────────────────
+async function loadChart(code, category) {
+  const cacheKey = `${code}:${category}`;
+  let data = historyCache[cacheKey];
+  if (!data) {
+    try {
+      const r = await fetch(`/api/history/${code}/${category}`);
+      data = await r.json();
+      if (data.error) throw new Error(data.error);
+      historyCache[cacheKey] = data;
+    } catch(e) {
+      document.getElementById('chart-svg-wrap').innerHTML = `<div class="chart-loading" style="color:var(--red)">Chart error: ${e.message}</div>`;
+      return;
+    }
+  }
+  renderChart(data.dates, data.net_contracts);
+}
+
+function renderChart(dates, values) {
+  const el = document.getElementById('chart-svg-wrap');
+  if (!el) return;
+  if (!values || values.length < 2) { el.innerHTML = '<div class="chart-loading">Insufficient data</div>'; return; }
+
+  const W = el.offsetWidth || 600, H = 100, pad = { t: 8, r: 8, b: 22, l: 60 };
+  const iW = W - pad.l - pad.r, iH = H - pad.t - pad.b;
+
+  const mn = Math.min(...values), mx = Math.max(...values);
+  const rng = mx - mn || 1;
+  const zero_y = pad.t + (1 - (0 - mn) / rng) * iH;
+  const clamp_zy = Math.min(Math.max(zero_y, pad.t), pad.t + iH);
+
+  const pts = values.map((v, i) => {
+    const x = pad.l + (i / (values.length - 1)) * iW;
+    const y = pad.t + (1 - (v - mn) / rng) * iH;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+
+  // Fill polygon: close to zero line
+  const firstX = pad.l, lastX = pad.l + iW;
+  const fillPts = [...pts, `${lastX.toFixed(1)},${clamp_zy.toFixed(1)}`, `${firstX.toFixed(1)},${clamp_zy.toFixed(1)}`].join(' ');
+
+  const latestPos = values[values.length - 1] >= 0;
+  const lineColor = latestPos ? '#3fb950' : '#f85149';
+  const fillColor = latestPos ? 'rgba(63,185,80,0.12)' : 'rgba(248,81,73,0.12)';
+
+  // Y-axis labels
+  function fmt_y(v) {
+    if (Math.abs(v) >= 100000) return (v/1000).toFixed(0) + 'K';
+    if (Math.abs(v) >= 1000)   return (v/1000).toFixed(1) + 'K';
+    return v.toFixed(0);
+  }
+  const ticks = [mn, (mn+mx)/2, mx];
+
+  // X-axis ticks (every ~6 months)
+  let xLabels = '';
+  const step = Math.max(1, Math.floor(dates.length / 8));
+  for (let i = 0; i < dates.length; i += step) {
+    const x = pad.l + (i / (dates.length - 1)) * iW;
+    const d = dates[i] ? dates[i].slice(0, 7) : '';
+    xLabels += `<text x="${x.toFixed(1)}" y="${H - 4}" text-anchor="middle" fill="#6e7681" font-size="9">${d}</text>`;
+  }
+
+  el.innerHTML = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+    <!-- grid -->
+    ${ticks.map(v => {
+      const y = pad.t + (1 - (v - mn) / rng) * iH;
+      return `<line x1="${pad.l}" y1="${y.toFixed(1)}" x2="${pad.l + iW}" y2="${y.toFixed(1)}" stroke="#21262d" stroke-width="1"/>
+              <text x="${pad.l - 4}" y="${(y+3).toFixed(1)}" text-anchor="end" fill="#6e7681" font-size="9">${fmt_y(v)}</text>`;
+    }).join('')}
+    <!-- zero line -->
+    <line x1="${pad.l}" y1="${clamp_zy.toFixed(1)}" x2="${pad.l + iW}" y2="${clamp_zy.toFixed(1)}" stroke="#444c56" stroke-width="1" stroke-dasharray="4,3"/>
+    <!-- fill -->
+    <polygon points="${fillPts}" fill="${fillColor}"/>
+    <!-- line -->
+    <polyline points="${pts.join(' ')}" fill="none" stroke="${lineColor}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+    <!-- last dot -->
+    <circle cx="${(pad.l + iW).toFixed(1)}" cy="${pts[pts.length-1].split(',')[1]}" r="3" fill="${lineColor}"/>
+    <!-- x labels -->
+    ${xLabels}
+  </svg>`;
+}
+
+// ────────────────────────────────────────────────────────────
+// Insights
+// ────────────────────────────────────────────────────────────
+async function getMarketInsight(force=false) {
+  if (!selectedCode) { toast('Select a market first', 'err'); return; }
+  const m = allMarkets.find(x => x.code === selectedCode);
+  setInsightLoading(`${m ? m.display : selectedCode} — generating insight…`);
+  try {
+    const r = await fetch(`/api/insight/${selectedCode}`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ force })
+    });
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    setInsightText(d.text, `INSIGHT — ${m ? m.display : selectedCode}`);
+  } catch(e) {
+    setInsightText(`Error: ${e.message}`, 'INSIGHT — error', true);
+  }
+}
+
+async function getMacroInsight(force=false) {
+  setInsightLoading('MACRO — generating cross-asset analysis…');
+  try {
+    const r = await fetch('/api/macro', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ force })
+    });
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    setInsightText(d.text, 'MACRO ANALYSIS');
+  } catch(e) {
+    setInsightText(`Error: ${e.message}`, 'MACRO ANALYSIS — error', true);
+  }
+}
+
+function setInsightLoading(label) {
+  document.getElementById('insight-label').textContent = label;
+  document.getElementById('insight-spinner').style.display = 'block';
+  const b = document.getElementById('insight-body');
+  b.className = 'placeholder'; b.textContent = 'Thinking…';
+}
+function setInsightText(text, label, isErr=false) {
+  document.getElementById('insight-label').textContent = label;
+  document.getElementById('insight-spinner').style.display = 'none';
+  const b = document.getElementById('insight-body');
+  b.className = isErr ? 'placeholder' : '';
+  b.style.color = isErr ? 'var(--red)' : '';
+  b.textContent = text;
+}
+
+// ────────────────────────────────────────────────────────────
+// Tabs
+// ────────────────────────────────────────────────────────────
+function switchTab(name, btn) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  const pane = document.getElementById(`pane-${name}`);
+  if (pane) pane.classList.add('active');
+
+  if (name === 'detail' && selectedCode) {
+    // Re-render chart on tab switch (size may have changed)
+    setTimeout(() => {
+      const m = allMarkets.find(x => x.code === selectedCode);
+      if (m) loadChart(m.code, m.primary_cat);
+    }, 50);
+  }
+}
+
+// ────────────────────────────────────────────────────────────
+// Keyboard navigation
+// ────────────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+  if (e.key === 'i' && !e.shiftKey) { e.preventDefault(); getMarketInsight(false); }
+  if (e.key === 'I' &&  e.shiftKey) { e.preventDefault(); getMarketInsight(true); }
+  if (e.key === 'm' || e.key === 'M') { e.preventDefault(); getMacroInsight(false); }
+  if (e.key === 'r' || e.key === 'R') { e.preventDefault(); loadMetrics(); }
+  if (e.key === '1') switchTab('heatmap', document.querySelector('.tab-btn'));
+  if (e.key === '2') switchTab('detail',  document.querySelectorAll('.tab-btn')[1]);
+
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    const codes = allMarkets.map(m => m.code);
+    const idx = codes.indexOf(selectedCode);
+    if (e.key === 'ArrowDown') selectMarket(codes[(idx + 1) % codes.length]);
+    else selectMarket(codes[(idx - 1 + codes.length) % codes.length]);
+  }
+});
+
+// ────────────────────────────────────────────────────────────
+// Init
+// ────────────────────────────────────────────────────────────
+loadMetrics();
+</script>
+</body>
+</html>

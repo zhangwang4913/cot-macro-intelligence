@@ -1,0 +1,22 @@
+# secrets
+.env
+
+# data files
+*.db
+data/
+*.zip
+*.xls
+*.xlsx
+.etag_cache.json
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# misc
+.DS_Store
+Thumbs.db
